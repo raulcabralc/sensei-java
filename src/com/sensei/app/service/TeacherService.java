@@ -1,3 +1,0 @@
-@Service
-public class TeacherService {
-}
