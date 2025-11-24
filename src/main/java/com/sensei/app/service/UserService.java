@@ -9,6 +9,7 @@ import com.sensei.app.exceptions.NoChangesMadeException;
 import com.sensei.app.exceptions.UserNotFoundException;
 import com.sensei.app.model.User;
 import com.sensei.app.repository.UserRepository;
+import org.springframework.security.crypto.password.PasswordEncoder;
 import org.springframework.stereotype.Service;
 
 import java.util.*;
@@ -16,9 +17,11 @@ import java.util.*;
 @Service
 public class UserService {
     private final UserRepository userRepository;
+    private final PasswordEncoder passwordEncoder;
 
-    public UserService(UserRepository userRepository) {
+    public UserService(UserRepository userRepository, PasswordEncoder passwordEncoder) {
         this.userRepository = userRepository;
+        this.passwordEncoder = passwordEncoder;
     }
 
     public List<User> index() {
@@ -35,6 +38,10 @@ public class UserService {
             User user = userDTO.toEntity();
 
             this.emailRegistered(user.getEmail());
+
+            String encryptedPassword = passwordEncoder.encode(user.getPassword());
+
+            user.setPassword(encryptedPassword);
 
             this.userRepository.save(user);
 
@@ -110,7 +117,7 @@ public class UserService {
 
     //  UTILS
 
-    private void emailRegistered(String email) {
+    void emailRegistered(String email) {
         Optional<User> user = this.userRepository.findByEmail(email);
 
         if (user.isPresent()) {
