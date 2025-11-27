@@ -3,6 +3,7 @@ package com.sensei.app.config;
 import com.fasterxml.jackson.databind.exc.InvalidFormatException;
 import com.sensei.app.exceptions.EmailAlreadyExistsException;
 import com.sensei.app.exceptions.NoChangesMadeException;
+import org.apache.coyote.BadRequestException;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.converter.HttpMessageNotReadableException;
 import org.springframework.web.bind.MethodArgumentNotValidException;
@@ -67,6 +68,12 @@ public class GlobalExceptionHandler {
     @ResponseStatus(HttpStatus.BAD_REQUEST)
     @ExceptionHandler(NoChangesMadeException.class)
     public Map<String, String> handleNoChangesMadeException(NoChangesMadeException e) {
+        return Collections.singletonMap("error", e.getMessage());
+    }
+
+    @ResponseStatus(HttpStatus.BAD_REQUEST)
+    @ExceptionHandler(BadRequestException.class)
+    public Map<String, String> handleBadRequestException(BadRequestException e) {
         return Collections.singletonMap("error", e.getMessage());
     }
 }
