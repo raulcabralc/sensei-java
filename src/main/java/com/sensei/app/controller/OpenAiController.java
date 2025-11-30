@@ -34,19 +34,21 @@ public class OpenAiController {
     }
 
     @PostMapping("/summarize")
-    public ResponseEntity<String> summarize(@Valid @RequestBody SummarizeRequestDTO text) throws BadRequestException {
+    public ResponseEntity<String> summarize(
+            @Valid @RequestBody SummarizeRequestDTO summarizeDTO
+    ) throws BadRequestException {
         try {
-            if (text.getText().isEmpty()) {
+            if (summarizeDTO.getText().isEmpty()) {
                 throw new BadRequestException("No text provided");
             }
 
-            String stringText = text.toString();
+            String stringText = summarizeDTO.toString();
 
             if (stringText == null || stringText.isEmpty()) {
                 throw new BadRequestException("No text provided");
             }
 
-            String summarizedText = this.openAiService.summarizeText(stringText);
+            String summarizedText = this.openAiService.summarizeText(stringText, summarizeDTO.getClassId(), summarizeDTO.getTeacherId());
 
             return ResponseEntity.ok(summarizedText);
         } catch (Exception e) {

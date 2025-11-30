@@ -76,6 +76,8 @@ public class MaterialService {
                 throw new UserIsNotTeacherException("The user " + material.getTeacherId() + " is not a teacher");
             }
 
+            material.setStatus(MaterialStatus.WAITING);
+
             this.materialRepository.save(material);
 
             this.classService.addMaterialToClass(material.getClassId(), material.getId());
@@ -89,7 +91,7 @@ public class MaterialService {
                     material.getDescription(),
                     material.getText(),
                     material.getTasks(),
-                    MaterialStatus.WAITING
+                    material.getStatus()
             );
         } catch  (Exception e) {
             throw new RuntimeException(e);
