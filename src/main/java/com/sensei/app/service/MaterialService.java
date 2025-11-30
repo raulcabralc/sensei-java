@@ -5,6 +5,7 @@ import com.sensei.app.dtos.MaterialResponseDTO;
 import com.sensei.app.enums.MaterialStatus;
 import com.sensei.app.enums.MaterialType;
 import com.sensei.app.exceptions.ClassDoesNotExistException;
+import com.sensei.app.exceptions.MaterialDoesNotExistException;
 import com.sensei.app.exceptions.TeacherDoesNotExistException;
 import com.sensei.app.exceptions.UserIsNotTeacherException;
 import com.sensei.app.model.Material;
@@ -14,6 +15,7 @@ import com.sensei.app.utils.UserUtils;
 import org.apache.coyote.BadRequestException;
 import org.springframework.stereotype.Service;
 
+import java.util.EnumSet;
 import java.util.List;
 
 @Service
@@ -94,6 +96,40 @@ public class MaterialService {
                     material.getStatus()
             );
         } catch  (Exception e) {
+            throw new RuntimeException(e);
+        }
+    }
+
+    public MaterialResponseDTO changeStatus(String materialId, MaterialStatus materialStatus) {
+        try {
+            Material material = this.materialRepository.findById(materialId)
+                    .orElseThrow(() -> new MaterialDoesNotExistException("Material " + materialId + " does not exist"));
+
+            if (
+                    (!EnumSet.of(
+                            MaterialStatus.WAITING,
+                            MaterialStatus.APPROVED
+                    ).contains(material.getStatus()))
+            ) {
+                throw new BadRequestException("Invalid status. Valid status: [" + EnumSet.allOf(MaterialStatus.class) + "]");
+            }
+
+            material.setStatus(materialStatus);
+
+            this.materialRepository.save(material);
+
+            return new MaterialResponseDTO(
+                    material.getId(),
+                    material.getClassId(),
+                    material.getTeacherId(),
+                    material.getMaterialType(),
+                    material.getTitle(),
+                    material.getDescription(),
+                    material.getText(),
+                    material.getTasks(),
+                    material.getStatus()
+            );
+        } catch (Exception e) {
             throw new RuntimeException(e);
         }
     }

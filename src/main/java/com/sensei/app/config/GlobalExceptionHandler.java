@@ -10,6 +10,7 @@ import org.springframework.web.bind.MethodArgumentNotValidException;
 import org.springframework.web.bind.annotation.ExceptionHandler;
 import org.springframework.web.bind.annotation.ResponseStatus;
 import org.springframework.web.bind.annotation.RestControllerAdvice;
+import org.springframework.web.method.annotation.MethodArgumentTypeMismatchException;
 
 import java.util.Arrays;
 import java.util.Collections;
@@ -75,5 +76,18 @@ public class GlobalExceptionHandler {
     @ExceptionHandler(BadRequestException.class)
     public Map<String, String> handleBadRequestException(BadRequestException e) {
         return Collections.singletonMap("error", e.getMessage());
+    }
+
+    @ResponseStatus(HttpStatus.BAD_REQUEST)
+    @ExceptionHandler(MethodArgumentTypeMismatchException.class)
+    public Map<String, String> handleTypeMismatch(MethodArgumentTypeMismatchException ex) {
+
+        if (ex.getRequiredType() != null && ex.getRequiredType().isEnum()) {
+            String validValues = Arrays.toString(ex.getRequiredType().getEnumConstants());
+            return Collections.singletonMap("error",
+                    String.format("Invalid value '%s'. Allowed values: %s", ex.getValue(), validValues));
+        }
+
+        return Collections.singletonMap("error", "Invalid argument type: " + ex.getMessage());
     }
 }

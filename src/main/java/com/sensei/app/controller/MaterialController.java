@@ -2,6 +2,7 @@ package com.sensei.app.controller;
 
 import com.sensei.app.dtos.CreateMaterialDTO;
 import com.sensei.app.dtos.MaterialResponseDTO;
+import com.sensei.app.enums.MaterialStatus;
 import com.sensei.app.model.Material;
 import com.sensei.app.service.MaterialService;
 import jakarta.validation.Valid;
@@ -44,6 +45,20 @@ public class MaterialController {
             return ResponseEntity.ok(material);
         } catch (Exception e) {
             throw new BadRequestException(e);
+        }
+    }
+
+    @PostMapping("/status/{materialId}/{status}")
+    public ResponseEntity<MaterialResponseDTO> changeStatus(
+            @PathVariable("materialId") String materialId,
+            @PathVariable("status") MaterialStatus status
+    ) throws BadRequestException {
+        try {
+            MaterialResponseDTO material = this.materialService.changeStatus(materialId, status);
+
+            return ResponseEntity.ok(material);
+        } catch (Exception e) {
+            throw new BadRequestException(e.getCause());
         }
     }
 }
