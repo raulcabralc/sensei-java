@@ -1,2 +1,3 @@
-# sensei-java
-Projeto para ajudar na educação com IA.
+🥋 SENSEI (Java)
+
+🔗 Projeto original: [github.com/raulcabralc/sensei](https://github.com/raulcabralc/sensei)
