@@ -60,7 +60,7 @@ Uma aplicação robusta construída com as melhores práticas de Engenharia de S
 ### 1. Pré-requisitos
 
 * **JDK 17.**
-* **Maven** — o IntelliJ IDEA já traz um Maven embutido (o projeto não possui Maven Wrapper).
+* **Maven** — não é necessário instalar: o projeto inclui o Maven Wrapper (`mvnw` / `mvnw.cmd`, Maven 3.9.16), e o IntelliJ IDEA também traz um Maven embutido.
 * **MongoDB** acessível. Para desenvolvimento, um MongoDB local na porta `27017` basta; por exemplo, via Docker:
   `docker run -d --name sensei-mongo -p 27017:27017 mongo:7`
 * **Chave da API OpenAI** — necessária apenas para os endpoints `/ai/**` (veja o item 8).
@@ -82,6 +82,7 @@ Todas as configurações sensíveis vêm de variáveis de ambiente (arquivos em 
 | `JWT_EXPIRATION_MS` | Não | Padrão `86400000` (24 h). Máximo `2147483647`. |
 | `MONGODB_URI` | Sim, exceto no `dev` | No `dev`, o padrão é `mongodb://localhost:27017/sensei`. |
 | `OPENAI_API_KEY` | Sim, exceto no `dev` | No `dev` pode ficar vazia (os endpoints `/ai/**` falham). |
+| `CORS_ALLOWED_ORIGINS` | Não | Origens de navegador autorizadas, separadas por vírgula (ex.: `http://localhost:5173`). Vazio: nenhuma origem externa. `*` não é aceito. |
 
 > ⚠️ O Spring Boot **não** lê arquivos `.env` automaticamente. O `.env.example` serve como referência; os valores devem ser informados na Run Configuration (abaixo) ou no shell. Nunca versione um `.env` real (ele já está no `.gitignore`).
 
@@ -115,10 +116,22 @@ Sem perfil ativo, a aplicação usa apenas `application.yml` e exige `MONGODB_UR
 
 Execute a configuração criada (▶) ou clique no ícone de execução ao lado do método `main` de `SenseiApplication`.
 
-Pelo terminal (com as variáveis já exportadas e o Maven instalado):
+Pelo terminal, com as variáveis já exportadas, usando o Maven Wrapper:
 
 ```bash
-mvn spring-boot:run -Dspring-boot.run.profiles=dev
+# Linux / macOS / Git Bash
+./mvnw spring-boot:run -Dspring-boot.run.profiles=dev
+```
+
+```powershell
+# Windows
+.\mvnw.cmd spring-boot:run "-Dspring-boot.run.profiles=dev"
+```
+
+Compilar e executar os testes automatizados (não exigem MongoDB nem OpenAI):
+
+```bash
+./mvnw clean verify        # Windows: .\mvnw.cmd clean verify
 ```
 
 ### 6. Identificando uma inicialização bem-sucedida
@@ -141,7 +154,8 @@ Erros comuns na inicialização:
 | `Could not resolve placeholder 'JWT_SECRET'` | `JWT_SECRET` não definida. |
 | `Could not resolve placeholder 'OPENAI_API_KEY'` | Chave ausente fora do perfil `dev` (verifique se o perfil está ativo). |
 | Connection string inválida contendo `${MONGODB_URI}` | `MONGODB_URI` ausente fora do perfil `dev`. |
-| `WeakKeyException` no primeiro login | `JWT_SECRET` com menos de 32 bytes. |
+| `Invalid JWT configuration: ... must be at least 32 bytes` | `JWT_SECRET` com menos de 32 bytes (a aplicação não inicia). |
+| `Invalid CORS configuration` | `CORS_ALLOWED_ORIGINS` contém `*`. |
 
 ### 7. Serviços externos necessários
 
@@ -154,7 +168,14 @@ Erros comuns na inicialização:
 * Cada chamada a esses endpoints é cobrada na sua conta OpenAI.
 * Use uma chave pessoal, informe-a apenas como variável de ambiente e nunca a escreva em arquivos do repositório.
 
-> ℹ️ Estado atual: o cadastro de usuários (`POST /user/create`) exige um token JWT, portanto o primeiro login depende de um usuário já existente no banco. Isso será tratado na etapa de ajustes do Spring Security.
+### 9. Primeiro acesso
+
+1. Cadastre-se (público): `POST /auth/register` com `{"name", "email", "password", "role"}`; `role` deve ser `TEACHER` ou `STUDENT` e só é definido no cadastro. A senha deve ter de 8 a 72 caracteres.
+2. Faça login: `POST /auth/login` com `{"email", "password"}`; a resposta contém o `token`.
+3. Envie o token nas demais requisições: `Authorization: Bearer <token>`.
+4. `GET /user/me` retorna os dados do usuário autenticado, incluindo o `id` usado em `PATCH /user/update/{id}` e `DELETE /user/delete/{id}` (cada usuário só altera ou exclui a própria conta).
+
+> ℹ️ Alterar o próprio e-mail invalida o token atual (o token identifica o usuário pelo e-mail): faça login novamente com o novo e-mail.
 
 ## 🎯 Objetivo
 

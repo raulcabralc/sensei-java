@@ -7,4 +7,6 @@ import java.util.List;
 
 public interface MaterialRepository extends MongoRepository<Material, String> {
     List<Material> findByClassId(String classId);
+
+    boolean existsByTeacherId(String teacherId);
 }

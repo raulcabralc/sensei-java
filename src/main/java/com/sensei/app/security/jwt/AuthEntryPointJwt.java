@@ -1,36 +1,24 @@
 package com.sensei.app.security.jwt;
 
-import com.fasterxml.jackson.databind.ObjectMapper;
-import jakarta.servlet.ServletException;
+import com.sensei.app.security.SecurityErrorResponses;
 import jakarta.servlet.http.HttpServletRequest;
 import jakarta.servlet.http.HttpServletResponse;
+import org.springframework.http.HttpStatus;
 import org.springframework.security.core.AuthenticationException;
 import org.springframework.security.web.AuthenticationEntryPoint;
 import org.springframework.stereotype.Component;
 
 import java.io.IOException;
-import java.util.HashMap;
-import java.util.Map;
 
+/**
+ * Responde 401 em JSON para requisições sem token, com token inválido ou expirado.
+ */
 @Component
 public class AuthEntryPointJwt implements AuthenticationEntryPoint {
-    public final ObjectMapper mapper = new ObjectMapper();
-
     @Override
     public void commence(HttpServletRequest request,
                          HttpServletResponse response,
-                         AuthenticationException authException
-                        ) throws IOException, ServletException {
-        response.setStatus(HttpServletResponse.SC_UNAUTHORIZED);
-        response.setContentType("application/json");
-        response.setCharacterEncoding("UTF-8");
-
-        Map<String, Object> errorDetails = new HashMap<>();
-        errorDetails.put("status", HttpServletResponse.SC_UNAUTHORIZED);
-        errorDetails.put("error", "Unauthorized");
-        errorDetails.put("message", "Full authentication is required to access this resource.");
-        errorDetails.put("path", request.getServletPath());
-
-        mapper.writeValue(response.getWriter(), errorDetails);
+                         AuthenticationException authException) throws IOException {
+        SecurityErrorResponses.write(response, HttpStatus.UNAUTHORIZED, SecurityErrorResponses.UNAUTHENTICATED_MESSAGE, request);
     }
 }

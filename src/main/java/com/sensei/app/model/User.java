@@ -1,5 +1,6 @@
 package com.sensei.app.model;
 
+import com.fasterxml.jackson.annotation.JsonIgnore;
 import com.sensei.app.enums.UserRole;
 import lombok.Data;
 import org.springframework.data.annotation.Id;
@@ -19,6 +20,9 @@ public class User {
 
     private UserRole role;
 
+    // Proteção defensiva: o hash nunca é serializado em JSON, mesmo que a entidade
+    // seja retornada por engano. Não afeta o mapeamento do MongoDB.
+    @JsonIgnore
     private String password;
 
     private List<String> classIds;

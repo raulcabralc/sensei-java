@@ -28,6 +28,10 @@ app:
   # Validade do token em milissegundos. Padrão: 24 horas.
   # O campo no código é int: valor máximo 2147483647 (~24,8 dias).
   jwtExpirationMs: ${JWT_EXPIRATION_MS:86400000}
+  cors:
+    # Origens de navegador autorizadas (separadas por vírgula), ex.: http://localhost:5173
+    # Vazio (padrão): nenhuma origem externa é aceita. '*' não é permitido.
+    allowed-origins: ${CORS_ALLOWED_ORIGINS:}
 
 openai:
   api:
