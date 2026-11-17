@@ -1,5 +1,6 @@
 package com.sensei.app.service;
 
+import com.sensei.app.dtos.ClassResponseDTO;
 import com.sensei.app.dtos.CreateClassDTO;
 import com.sensei.app.dtos.UpdateClassDTO;
 import com.sensei.app.enums.UserRole;
@@ -44,32 +45,47 @@ public class ClassService {
         this.userRepository = userRepository;
     }
 
-    public List<Class> index(AuthenticatedUser user) {
+    public List<ClassResponseDTO> index(AuthenticatedUser user) {
         if (AccessChecks.isTeacher(user)) {
-            return this.classRepository.findByTeacherId(user.getId());
+            return this.classRepository.findByTeacherId(user.getId())
+                    .stream()
+                    .map(ClassResponseDTO::forTeacher)
+                    .toList();
         }
 
         if (AccessChecks.isStudent(user)) {
-            return this.classRepository.findByStudentIds(user.getId());
+            return this.classRepository.findByStudentIds(user.getId())
+                    .stream()
+                    .map(ClassResponseDTO::forStudent)
+                    .toList();
         }
 
         return List.of();
     }
 
-    public Class createClass(CreateClassDTO classDTO, AuthenticatedUser user) {
+    /**
+     * Turma visível ao usuário, na representação adequada ao seu vínculo com ela.
+     */
+    public ClassResponseDTO getClassView(String classId, AuthenticatedUser user) {
+        Class clazz = this.getVisibleClass(classId, user);
+
+        return isOwner(clazz, user) ? ClassResponseDTO.forTeacher(clazz) : ClassResponseDTO.forStudent(clazz);
+    }
+
+    public ClassResponseDTO createClass(CreateClassDTO classDTO, AuthenticatedUser user) {
         AccessChecks.requireTeacher(user);
         AccessChecks.assertDeclaredTeacherMatches(classDTO.getTeacherId(), user);
 
         List<String> studentIds = this.validateStudentIds(classDTO.getStudentIds());
 
-        return this.classRepository.save(classDTO.toEntity(user.getId(), studentIds));
+        return ClassResponseDTO.forTeacher(this.classRepository.save(classDTO.toEntity(user.getId(), studentIds)));
     }
 
     /**
      * Atualiza a turma existente (nunca cria outra). O professor responsável e os
      * materiais vinculados não podem ser alterados por este endpoint.
      */
-    public Class updateClass(String classId, UpdateClassDTO classDTO, AuthenticatedUser user) {
+    public ClassResponseDTO updateClass(String classId, UpdateClassDTO classDTO, AuthenticatedUser user) {
         Class clazz = this.getOwnedClass(classId, user);
 
         if (!classDTO.getUnsupportedFields().isEmpty()) {
@@ -104,7 +120,7 @@ public class ClassService {
             throw new NoChangesMadeException("No fields were filled for update. Fields: [subject, title, description, studentIds]");
         }
 
-        return this.classRepository.save(clazz);
+        return ClassResponseDTO.forTeacher(this.classRepository.save(clazz));
     }
 
     /**

@@ -40,3 +40,10 @@ openai:
     # Endpoints públicos da OpenAI (não são segredos).
     url: https://api.openai.com/v1/audio/transcriptions
     chat-url: https://api.openai.com/v1/chat/completions
+  # Timeouts das chamadas à OpenAI (sem retry automático).
+  timeout:
+    connect: ${OPENAI_TIMEOUT_CONNECT:10s}
+    # Resumo de texto (chat completions).
+    chat-read: ${OPENAI_TIMEOUT_CHAT_READ:90s}
+    # Transcrição de áudio de até 25 MB: pode levar alguns minutos.
+    transcription-read: ${OPENAI_TIMEOUT_TRANSCRIPTION_READ:300s}

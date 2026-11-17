@@ -97,9 +97,12 @@ class AuthAndUserSecurityTest {
     private MaterialRepository materialRepository;
 
     @BeforeEach
-    void resetMocks() {
-        // Reset explícito: garante testes independentes da ordem de execução das classes @Nested.
-        Mockito.reset(userRepository, classRepository, materialRepository);
+    void assertNoLeakedInvocations() {
+        // Nenhum mock pode chegar a um teste com invocações de testes anteriores.
+        for (Object mock : List.of(userRepository, classRepository, materialRepository)) {
+            assertThat(Mockito.mockingDetails(mock).getInvocations())
+                    .as("invocations leaked from a previous test").isEmpty();
+        }
     }
 
     // ---------- helpers ----------
@@ -186,7 +189,7 @@ class AuthAndUserSecurityTest {
                     {"name":"X","email":"x@test.com","role":"ADMIN","password":"senhaSegura123"}
                     """)
                     .andExpect(status().isBadRequest())
-                    .andExpect(jsonPath("$.error", containsString("TEACHER")));
+                    .andExpect(jsonPath("$.message", containsString("TEACHER")));
 
             verify(userRepository, never()).save(any());
         }
@@ -197,7 +200,7 @@ class AuthAndUserSecurityTest {
                     {"name":"X","email":"x@test.com","password":"senhaSegura123"}
                     """)
                     .andExpect(status().isBadRequest())
-                    .andExpect(jsonPath("$.role").value("Role is required."));
+                    .andExpect(jsonPath("$.fieldErrors.role").value("Role is required."));
 
             verify(userRepository, never()).save(any());
         }
@@ -220,7 +223,7 @@ class AuthAndUserSecurityTest {
                     {"name":"X","email":"x@test.com","role":"STUDENT","password":"123"}
                     """)
                     .andExpect(status().isBadRequest())
-                    .andExpect(jsonPath("$.password").exists());
+                    .andExpect(jsonPath("$.fieldErrors.password").exists());
 
             verify(userRepository, never()).save(any());
         }
@@ -233,7 +236,7 @@ class AuthAndUserSecurityTest {
 
             register("{\"name\":\"X\",\"email\":\"x@test.com\",\"role\":\"STUDENT\",\"password\":\"" + password + "\"}")
                     .andExpect(status().isBadRequest())
-                    .andExpect(jsonPath("$.error", containsString("72 bytes")));
+                    .andExpect(jsonPath("$.message", containsString("72 bytes")));
 
             verify(userRepository, never()).save(any());
         }
@@ -442,7 +445,7 @@ class AuthAndUserSecurityTest {
             mvc.perform(patch("/user/update/s1").header(HttpHeaders.AUTHORIZATION, bearer(student))
                             .contentType(MediaType.APPLICATION_JSON).content("{\"role\":\"TEACHER\"}"))
                     .andExpect(status().isBadRequest())
-                    .andExpect(jsonPath("$.error", containsString("role")));
+                    .andExpect(jsonPath("$.message", containsString("role")));
 
             verify(userRepository, never()).save(any());
             assertThat(student.getRole()).isEqualTo(UserRole.STUDENT);
@@ -456,8 +459,8 @@ class AuthAndUserSecurityTest {
                             .contentType(MediaType.APPLICATION_JSON)
                             .content("{\"name\":\"Novo\",\"id\":\"outro\",\"password\":\"x\"}"))
                     .andExpect(status().isBadRequest())
-                    .andExpect(jsonPath("$.error", containsString("id")))
-                    .andExpect(jsonPath("$.error", containsString("password")));
+                    .andExpect(jsonPath("$.message", containsString("id")))
+                    .andExpect(jsonPath("$.message", containsString("password")));
 
             verify(userRepository, never()).save(any());
         }

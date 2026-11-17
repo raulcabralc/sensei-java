@@ -34,15 +34,15 @@ public class MaterialService {
         this.classService = classService;
     }
 
-    public List<Material> index(String classId, AuthenticatedUser user) {
+    public List<MaterialResponseDTO> index(String classId, AuthenticatedUser user) {
         Class clazz = this.classService.getVisibleClass(classId, user);
 
-        if (ClassService.isOwner(clazz, user)) {
-            return this.materialRepository.findByClassId(clazz.getId());
-        }
+        List<Material> materials = ClassService.isOwner(clazz, user)
+                ? this.materialRepository.findByClassId(clazz.getId())
+                // Aluno matriculado: materiais pendentes nunca são consultados nem retornados.
+                : this.materialRepository.findByClassIdAndStatus(clazz.getId(), MaterialStatus.APPROVED);
 
-        // Aluno matriculado: materiais pendentes nunca são retornados.
-        return this.materialRepository.findByClassIdAndStatus(clazz.getId(), MaterialStatus.APPROVED);
+        return materials.stream().map(MaterialService::toResponse).toList();
     }
 
     /**

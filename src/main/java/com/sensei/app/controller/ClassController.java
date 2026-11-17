@@ -1,8 +1,8 @@
 package com.sensei.app.controller;
 
+import com.sensei.app.dtos.ClassResponseDTO;
 import com.sensei.app.dtos.CreateClassDTO;
 import com.sensei.app.dtos.UpdateClassDTO;
-import com.sensei.app.model.Class;
 import com.sensei.app.security.AuthenticatedUser;
 import com.sensei.app.service.ClassService;
 import jakarta.validation.Valid;
@@ -26,7 +26,7 @@ public class ClassController {
      * Professor: suas turmas. Aluno: turmas em que está matriculado.
      */
     @GetMapping("/")
-    public ResponseEntity<List<Class>> index(@AuthenticationPrincipal AuthenticatedUser currentUser) {
+    public ResponseEntity<List<ClassResponseDTO>> index(@AuthenticationPrincipal AuthenticatedUser currentUser) {
         return ResponseEntity.ok(this.classService.index(currentUser));
     }
 
@@ -34,16 +34,16 @@ public class ClassController {
      * Turma do professor responsável ou de um aluno matriculado; 404 nos demais casos.
      */
     @GetMapping("/{classId}")
-    public ResponseEntity<Class> getClassById(
+    public ResponseEntity<ClassResponseDTO> getClassById(
             @PathVariable("classId") String classId,
             @AuthenticationPrincipal AuthenticatedUser currentUser
     ) {
-        return ResponseEntity.ok(this.classService.getVisibleClass(classId, currentUser));
+        return ResponseEntity.ok(this.classService.getClassView(classId, currentUser));
     }
 
     @PostMapping("/create")
     @PreAuthorize("hasRole('TEACHER')")
-    public ResponseEntity<Class> createClass(
+    public ResponseEntity<ClassResponseDTO> createClass(
             @Valid @RequestBody CreateClassDTO classDTO,
             @AuthenticationPrincipal AuthenticatedUser currentUser
     ) {
@@ -52,7 +52,7 @@ public class ClassController {
 
     @PatchMapping("/update/{classId}")
     @PreAuthorize("hasRole('TEACHER')")
-    public ResponseEntity<Class> updateClass(
+    public ResponseEntity<ClassResponseDTO> updateClass(
             @PathVariable("classId") String classId,
             @Valid @RequestBody UpdateClassDTO classDTO,
             @AuthenticationPrincipal AuthenticatedUser currentUser

@@ -12,6 +12,7 @@ import com.sensei.app.model.Class;
 import com.sensei.app.security.AuthenticatedUser;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.springframework.beans.factory.annotation.Qualifier;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.core.io.ByteArrayResource;
 import org.springframework.http.HttpEntity;
@@ -28,6 +29,7 @@ import org.springframework.web.client.RestTemplate;
 import org.springframework.web.multipart.MultipartFile;
 
 import java.io.IOException;
+import java.net.SocketTimeoutException;
 import java.time.LocalDate;
 import java.time.format.DateTimeFormatter;
 import java.util.List;
@@ -41,23 +43,31 @@ public class OpenAiService {
     private static final Logger log = LoggerFactory.getLogger(OpenAiService.class);
     private static final String AI_SERVICE_ERROR = "Failed to communicate with the AI service.";
 
-    @Value("${openai.api.key}")
-    private String apiKey;
-
-    @Value("${openai.api.url}")
-    private String apiUrl;
-
-    @Value("${openai.api.chat-url}")
-    private String chatUrl;
+    private final String apiKey;
+    private final String apiUrl;
+    private final String chatUrl;
 
     private final MaterialService materialService;
     private final ClassService classService;
-    private final RestTemplate restTemplate;
+    private final RestTemplate chatRestTemplate;
+    private final RestTemplate transcriptionRestTemplate;
 
-    public OpenAiService(MaterialService materialService, ClassService classService, RestTemplate openAiRestTemplate) {
+    public OpenAiService(
+            MaterialService materialService,
+            ClassService classService,
+            @Qualifier("openAiChatRestTemplate") RestTemplate chatRestTemplate,
+            @Qualifier("openAiTranscriptionRestTemplate") RestTemplate transcriptionRestTemplate,
+            @Value("${openai.api.key}") String apiKey,
+            @Value("${openai.api.url}") String apiUrl,
+            @Value("${openai.api.chat-url}") String chatUrl
+    ) {
         this.materialService = materialService;
         this.classService = classService;
-        this.restTemplate = openAiRestTemplate;
+        this.chatRestTemplate = chatRestTemplate;
+        this.transcriptionRestTemplate = transcriptionRestTemplate;
+        this.apiKey = apiKey;
+        this.apiUrl = apiUrl;
+        this.chatUrl = chatUrl;
     }
 
     /**
@@ -95,7 +105,7 @@ public class OpenAiService {
         HttpEntity<MultiValueMap<String, Object>> requestEntity = new HttpEntity<>(body, headers);
 
         try {
-            ResponseEntity<ResponseTranscribeDTO> response = restTemplate.postForEntity(apiUrl, requestEntity, ResponseTranscribeDTO.class);
+            ResponseEntity<ResponseTranscribeDTO> response = transcriptionRestTemplate.postForEntity(apiUrl, requestEntity, ResponseTranscribeDTO.class);
 
             return response.getBody();
         } catch (RestClientException e) {
@@ -157,7 +167,7 @@ public class OpenAiService {
 
         OpenAiResponseDTO responseBody;
         try {
-            responseBody = restTemplate.postForEntity(chatUrl, requestEntity, OpenAiResponseDTO.class).getBody();
+            responseBody = chatRestTemplate.postForEntity(chatUrl, requestEntity, OpenAiResponseDTO.class).getBody();
         } catch (RestClientException e) {
             throw externalFailure("summary", e);
         }
@@ -177,8 +187,12 @@ public class OpenAiService {
     private static ExternalServiceException externalFailure(String operation, RestClientException e) {
         if (e instanceof RestClientResponseException responseException) {
             log.warn("OpenAI {} request failed with HTTP {}", operation, responseException.getStatusCode().value());
+        } else if (e.getCause() instanceof SocketTimeoutException) {
+            log.warn("OpenAI {} request timed out", operation);
         } else {
-            log.warn("OpenAI {} request failed: {}", operation, e.getClass().getSimpleName());
+            // Falha de conexão (recusada, DNS, TLS...) ou outro erro de I/O.
+            log.warn("OpenAI {} request failed: {}", operation,
+                    e.getCause() != null ? e.getCause().getClass().getSimpleName() : e.getClass().getSimpleName());
         }
 
         return new ExternalServiceException(AI_SERVICE_ERROR, e);

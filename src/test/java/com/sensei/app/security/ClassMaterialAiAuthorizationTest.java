@@ -25,9 +25,9 @@ import org.junit.jupiter.api.Test;
 import org.mockito.ArgumentCaptor;
 import org.mockito.Mockito;
 import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.beans.factory.annotation.Qualifier;
+import org.springframework.context.ApplicationContext;
 import org.springframework.boot.test.autoconfigure.web.servlet.WebMvcTest;
-import org.springframework.boot.test.context.TestConfiguration;
-import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Import;
 import org.springframework.http.HttpHeaders;
 import org.springframework.http.HttpMethod;
@@ -36,6 +36,7 @@ import org.springframework.mock.web.MockMultipartFile;
 import org.springframework.security.authentication.UsernamePasswordAuthenticationToken;
 import org.springframework.test.context.TestPropertySource;
 import org.springframework.test.context.bean.override.mockito.MockitoBean;
+import org.springframework.test.web.client.ExpectedCount;
 import org.springframework.test.web.client.MockRestServiceServer;
 import org.springframework.test.web.client.match.MockRestRequestMatchers;
 import org.springframework.test.web.client.response.MockRestResponseCreators;
@@ -43,6 +44,8 @@ import org.springframework.test.web.servlet.MockMvc;
 import org.springframework.test.web.servlet.ResultActions;
 import org.springframework.web.client.RestTemplate;
 
+import java.net.ConnectException;
+import java.net.SocketTimeoutException;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Optional;
@@ -85,7 +88,7 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
         ClassService.class,
         MaterialService.class,
         OpenAiService.class,
-        ClassMaterialAiAuthorizationTest.OpenAiTestClient.class
+        OpenAiTestClients.class
 })
 @TestPropertySource(properties = {
         "app.jwtSecret=test-only-jwt-secret-for-automated-tests-0123456789",
@@ -99,14 +102,6 @@ class ClassMaterialAiAuthorizationTest {
     static final String CHAT_URL = "https://openai.test/v1/chat/completions";
     private static final String FAKE_HASH = "$2a$10$fakeHashForTestsOnlyNotUsedForLoginXXXXXXXXXXXXXXXXXXXX";
 
-    @TestConfiguration
-    static class OpenAiTestClient {
-        @Bean
-        RestTemplate openAiRestTemplate() {
-            return new RestTemplate();
-        }
-    }
-
     @Autowired
     private MockMvc mvc;
 
@@ -114,7 +109,15 @@ class ClassMaterialAiAuthorizationTest {
     private JwtTokenProvider jwtTokenProvider;
 
     @Autowired
-    private RestTemplate openAiRestTemplate;
+    @Qualifier("openAiChatRestTemplate")
+    private RestTemplate openAiChatRestTemplate;
+
+    @Autowired
+    @Qualifier("openAiTranscriptionRestTemplate")
+    private RestTemplate openAiTranscriptionRestTemplate;
+
+    @Autowired
+    private ApplicationContext applicationContext;
 
     @MockitoBean
     private UserRepository userRepository;
@@ -125,7 +128,11 @@ class ClassMaterialAiAuthorizationTest {
     @MockitoBean
     private MaterialRepository materialRepository;
 
+    // Resumo (chat completions).
     private MockRestServiceServer openAi;
+
+    // Transcrição de áudio (cliente separado, com timeout de leitura maior).
+    private MockRestServiceServer openAiTranscription;
 
     private User t1;
     private User t2;
@@ -140,10 +147,14 @@ class ClassMaterialAiAuthorizationTest {
 
     @BeforeEach
     void setUp() {
-        // Reset explícito: garante testes independentes da ordem de execução das classes @Nested.
-        Mockito.reset(userRepository, classRepository, materialRepository);
+        // Nenhum mock pode chegar a um teste com invocações de testes anteriores.
+        for (Object mock : List.of(userRepository, classRepository, materialRepository)) {
+            assertThat(Mockito.mockingDetails(mock).getInvocations())
+                    .as("invocations leaked from a previous test").isEmpty();
+        }
 
-        openAi = MockRestServiceServer.bindTo(openAiRestTemplate).build();
+        openAi = MockRestServiceServer.bindTo(openAiChatRestTemplate).build();
+        openAiTranscription = MockRestServiceServer.bindTo(openAiTranscriptionRestTemplate).build();
 
         t1 = user("t1", "prof1@test.com", UserRole.TEACHER);
         t2 = user("t2", "prof2@test.com", UserRole.TEACHER);
@@ -178,6 +189,7 @@ class ClassMaterialAiAuthorizationTest {
     void verifyOpenAiInteractions() {
         // Falha se uma chamada esperada não ocorreu; chamadas inesperadas já falham no momento da requisição.
         openAi.verify();
+        openAiTranscription.verify();
     }
 
     // ---------- fixtures ----------
@@ -241,6 +253,22 @@ class ClassMaterialAiAuthorizationTest {
         return mvc.perform(get(url).header(HttpHeaders.AUTHORIZATION, bearer(as)));
     }
 
+    /**
+     * Respostas de erro para um recurso oculto e para um inexistente devem ser indistinguíveis.
+     * Apenas "path" difere, pois ecoa a URL da própria requisição.
+     */
+    private static void assertIndistinguishable(String hiddenBody, String missingBody, String hiddenPath, String missingPath) {
+        for (String field : List.of("$.status", "$.error", "$.message")) {
+            Object hidden = com.jayway.jsonpath.JsonPath.read(hiddenBody, field);
+            Object missing = com.jayway.jsonpath.JsonPath.read(missingBody, field);
+            assertThat(hidden).as(field).isEqualTo(missing);
+        }
+        assertThat((String) com.jayway.jsonpath.JsonPath.read(hiddenBody, "$.path")).isEqualTo(hiddenPath);
+        assertThat((String) com.jayway.jsonpath.JsonPath.read(missingBody, "$.path")).isEqualTo(missingPath);
+        assertThat(com.jayway.jsonpath.JsonPath.<java.util.Map<String, Object>>read(hiddenBody, "$").keySet())
+                .isEqualTo(com.jayway.jsonpath.JsonPath.<java.util.Map<String, Object>>read(missingBody, "$").keySet());
+    }
+
     private static final String NEW_CLASS_JSON = """
             {"subject":"Física","title":"Nova turma","description":"Descrição","studentIds":["s1"]}
             """;
@@ -291,8 +319,8 @@ class ClassMaterialAiAuthorizationTest {
                     {"subject":"Física","title":"T","description":"D","studentIds":["t2","ghost"]}
                     """)
                     .andExpect(status().isBadRequest())
-                    .andExpect(jsonPath("$.error", containsString("t2")))
-                    .andExpect(jsonPath("$.error", containsString("ghost")));
+                    .andExpect(jsonPath("$.message", containsString("t2")))
+                    .andExpect(jsonPath("$.message", containsString("ghost")));
 
             verify(classRepository, never()).save(any());
         }
@@ -303,7 +331,7 @@ class ClassMaterialAiAuthorizationTest {
                     {"subject":"Física"}
                     """)
                     .andExpect(status().isBadRequest())
-                    .andExpect(jsonPath("$.title").exists());
+                    .andExpect(jsonPath("$.fieldErrors.title").exists());
 
             verify(classRepository, never()).save(any());
         }
@@ -365,7 +393,7 @@ class ClassMaterialAiAuthorizationTest {
                     .andExpect(status().isNotFound())
                     .andReturn().getResponse().getContentAsString();
 
-            assertThat(foreign).isEqualTo(missing);
+            assertIndistinguishable(foreign, missing, "/class/c2", "/class/does-not-exist");
         }
 
         @Test
@@ -403,8 +431,8 @@ class ClassMaterialAiAuthorizationTest {
                     {"teacherId":"t2","materialIds":[]}
                     """)
                     .andExpect(status().isBadRequest())
-                    .andExpect(jsonPath("$.error", containsString("teacherId")))
-                    .andExpect(jsonPath("$.error", containsString("materialIds")));
+                    .andExpect(jsonPath("$.message", containsString("teacherId")))
+                    .andExpect(jsonPath("$.message", containsString("materialIds")));
 
             verify(classRepository, never()).save(any());
             assertThat(c1.getTeacherId()).isEqualTo("t1");
@@ -524,7 +552,7 @@ class ClassMaterialAiAuthorizationTest {
                     {"classId":"c1","materialType":"BASIC","title":"X","description":"Y"}
                     """)
                     .andExpect(status().isBadRequest())
-                    .andExpect(jsonPath("$.error").value("Text cannot be empty in BASIC material"));
+                    .andExpect(jsonPath("$.message").value("Text cannot be empty in BASIC material"));
 
             verify(materialRepository, never()).save(any());
         }
@@ -675,7 +703,7 @@ class ClassMaterialAiAuthorizationTest {
 
             String body = postJson("/ai/summarize", t1, summarizeJson("c1"))
                     .andExpect(status().isBadGateway())
-                    .andExpect(jsonPath("$.error").value("Failed to communicate with the AI service."))
+                    .andExpect(jsonPath("$.message").value("Failed to communicate with the AI service."))
                     .andReturn().getResponse().getContentAsString();
 
             assertThat(body).doesNotContain("internal details").doesNotContain("test-only-key");
@@ -684,7 +712,7 @@ class ClassMaterialAiAuthorizationTest {
 
         @Test
         void teacherTranscribesAudio() throws Exception {
-            openAi.expect(MockRestRequestMatchers.requestTo(TRANSCRIBE_URL))
+            openAiTranscription.expect(MockRestRequestMatchers.requestTo(TRANSCRIBE_URL))
                     .andExpect(MockRestRequestMatchers.method(HttpMethod.POST))
                     .andRespond(MockRestResponseCreators.withSuccess(
                             "{\"text\":\"transcrição da aula\",\"usage\":null}", MediaType.APPLICATION_JSON));
@@ -739,6 +767,353 @@ class ClassMaterialAiAuthorizationTest {
             getAs("/class/", legacy).andExpect(status().isOk()).andExpect(jsonPath("$.length()").value(0));
             getAs("/class/c1", legacy).andExpect(status().isNotFound());
             postJson("/class/create", legacy, NEW_CLASS_JSON).andExpect(status().isForbidden());
+        }
+    }
+
+    // ---------- formato das respostas ----------
+
+    @Nested
+    class ResponseShapes {
+        @Test
+        void teacherSeesFullClassIncludingEnrollmentAndMaterialReferences() throws Exception {
+            getAs("/class/c1", t1)
+                    .andExpect(status().isOk())
+                    .andExpect(jsonPath("$.id").value("c1"))
+                    .andExpect(jsonPath("$.teacherId").value("t1"))
+                    .andExpect(jsonPath("$.studentIds[0]").value("s1"))
+                    .andExpect(jsonPath("$.materialIds.length()").value(2))
+                    .andExpect(jsonPath("$.subject").value("Matemática"))
+                    .andExpect(jsonPath("$.title").value("Turma c1"))
+                    .andExpect(jsonPath("$.description").value("Descrição c1"));
+        }
+
+        @Test
+        void studentClassViewOmitsClassmatesAndMaterialReferences() throws Exception {
+            c1.getStudentIds().add("classmate-s9");
+
+            String body = getAs("/class/c1", s1)
+                    .andExpect(status().isOk())
+                    .andExpect(jsonPath("$.id").value("c1"))
+                    .andExpect(jsonPath("$.teacherId").value("t1"))
+                    .andExpect(jsonPath("$.subject").value("Matemática"))
+                    .andExpect(jsonPath("$.title").value("Turma c1"))
+                    .andExpect(jsonPath("$.studentIds").doesNotExist())
+                    .andExpect(jsonPath("$.materialIds").doesNotExist())
+                    .andReturn().getResponse().getContentAsString();
+
+            assertThat(body).doesNotContain("classmate-s9").doesNotContain("\"m1\"").doesNotContain("\"m2\"");
+        }
+
+        @Test
+        void studentClassListUsesTheSameRestrictedView() throws Exception {
+            when(classRepository.findByStudentIds("s1")).thenReturn(List.of(c1));
+
+            getAs("/class/", s1)
+                    .andExpect(status().isOk())
+                    .andExpect(jsonPath("$[0].id").value("c1"))
+                    .andExpect(jsonPath("$[0].studentIds").doesNotExist())
+                    .andExpect(jsonPath("$[0].materialIds").doesNotExist());
+        }
+
+        @Test
+        void teacherClassListUsesTheFullView() throws Exception {
+            when(classRepository.findByTeacherId("t1")).thenReturn(List.of(c1));
+
+            getAs("/class/", t1)
+                    .andExpect(status().isOk())
+                    .andExpect(jsonPath("$[0].studentIds[0]").value("s1"))
+                    .andExpect(jsonPath("$[0].materialIds.length()").value(2));
+        }
+
+        @Test
+        void legacyClassWithoutListsIsReturnedWithEmptyListsToTheTeacher() throws Exception {
+            c3.setStudentIds(null);
+            c3.setMaterialIds(null);
+
+            getAs("/class/c3", t1)
+                    .andExpect(status().isOk())
+                    .andExpect(jsonPath("$.studentIds.length()").value(0))
+                    .andExpect(jsonPath("$.materialIds.length()").value(0));
+        }
+
+        @Test
+        void studentMaterialListContainsOnlyApprovedContent() throws Exception {
+            when(materialRepository.findByClassIdAndStatus("c1", MaterialStatus.APPROVED)).thenReturn(List.of(m2));
+
+            String body = getAs("/material/c1", s1)
+                    .andExpect(status().isOk())
+                    .andExpect(jsonPath("$.length()").value(1))
+                    .andExpect(jsonPath("$[0].id").value("m2"))
+                    .andExpect(jsonPath("$[0].text").value("Conteúdo m2"))
+                    .andReturn().getResponse().getContentAsString();
+
+            assertThat(body).doesNotContain("WAITING").doesNotContain("\"m1\"").doesNotContain("Conteúdo m1");
+        }
+
+        @Test
+        void teacherMaterialListIncludesPendingMaterials() throws Exception {
+            when(materialRepository.findByClassId("c1")).thenReturn(List.of(m1, m2));
+
+            getAs("/material/c1", t1)
+                    .andExpect(status().isOk())
+                    .andExpect(jsonPath("$[0].id").value("m1"))
+                    .andExpect(jsonPath("$[0].status").value("WAITING"))
+                    .andExpect(jsonPath("$[1].status").value("APPROVED"));
+        }
+
+        @Test
+        void materialResponseExposesOnlyTheDocumentedFields() throws Exception {
+            when(materialRepository.findByClassIdAndStatus("c1", MaterialStatus.APPROVED)).thenReturn(List.of(m2));
+
+            String body = getAs("/material/c1", s1).andExpect(status().isOk())
+                    .andReturn().getResponse().getContentAsString();
+
+            java.util.Map<String, Object> item = com.jayway.jsonpath.JsonPath.read(body, "$[0]");
+            assertThat(item.keySet()).containsExactlyInAnyOrder(
+                    "id", "classId", "teacherId", "materialType", "title", "description", "text", "tasks", "status");
+        }
+    }
+
+    // ---------- recursos ocultos ----------
+
+    @Nested
+    class HiddenResources {
+        @Test
+        void approvingAnotherTeachersMaterialLooksLikeAMissingMaterial() throws Exception {
+            String hidden = postJson("/material/status/m3/APPROVED", t1, "").andExpect(status().isNotFound())
+                    .andReturn().getResponse().getContentAsString();
+            String missing = postJson("/material/status/nope/APPROVED", t1, "").andExpect(status().isNotFound())
+                    .andReturn().getResponse().getContentAsString();
+
+            assertIndistinguishable(hidden, missing, "/material/status/m3/APPROVED", "/material/status/nope/APPROVED");
+        }
+
+        @Test
+        void creatingMaterialInAForeignClassLooksLikeAMissingClass() throws Exception {
+            String hidden = postJson("/material/create", t1, """
+                    {"classId":"c2","materialType":"BASIC","title":"X","description":"Y","text":"Z"}
+                    """).andExpect(status().isNotFound()).andReturn().getResponse().getContentAsString();
+            String missing = postJson("/material/create", t1, """
+                    {"classId":"nope","materialType":"BASIC","title":"X","description":"Y","text":"Z"}
+                    """).andExpect(status().isNotFound()).andReturn().getResponse().getContentAsString();
+
+            assertThat(hidden).isEqualTo(missing);
+        }
+
+        @Test
+        void listingMaterialsOfAForeignClassLooksLikeAMissingClass() throws Exception {
+            String hidden = getAs("/material/c2", s1).andExpect(status().isNotFound())
+                    .andReturn().getResponse().getContentAsString();
+            String missing = getAs("/material/nope", s1).andExpect(status().isNotFound())
+                    .andReturn().getResponse().getContentAsString();
+
+            assertIndistinguishable(hidden, missing, "/material/c2", "/material/nope");
+        }
+
+        @Test
+        void updatingAForeignClassLooksLikeAMissingClass() throws Exception {
+            String hidden = patchJson("/class/update/c2", t1, "{\"title\":\"X\"}").andExpect(status().isNotFound())
+                    .andReturn().getResponse().getContentAsString();
+            String missing = patchJson("/class/update/nope", t1, "{\"title\":\"X\"}").andExpect(status().isNotFound())
+                    .andReturn().getResponse().getContentAsString();
+
+            assertIndistinguishable(hidden, missing, "/class/update/c2", "/class/update/nope");
+        }
+    }
+
+    // ---------- contrato de erros ----------
+
+    @Nested
+    class ErrorContract {
+        @Test
+        void validationErrorsListTheInvalidFields() throws Exception {
+            postJson("/class/create", t1, "{}")
+                    .andExpect(status().isBadRequest())
+                    .andExpect(jsonPath("$.status").value(400))
+                    .andExpect(jsonPath("$.error").value("Bad Request"))
+                    .andExpect(jsonPath("$.message").value("Validation failed."))
+                    .andExpect(jsonPath("$.path").value("/class/create"))
+                    .andExpect(jsonPath("$.fieldErrors.subject").exists())
+                    .andExpect(jsonPath("$.fieldErrors.title").exists())
+                    .andExpect(jsonPath("$.fieldErrors.description").exists());
+        }
+
+        @Test
+        void malformedJsonDoesNotRevealParserDetails() throws Exception {
+            String body = postJson("/class/create", t1, "{not valid json")
+                    .andExpect(status().isBadRequest())
+                    .andExpect(jsonPath("$.message").value("Malformed JSON request or invalid data type."))
+                    .andExpect(jsonPath("$.fieldErrors").doesNotExist())
+                    .andReturn().getResponse().getContentAsString();
+
+            assertThat(body).doesNotContainIgnoringCase("jackson").doesNotContain("JSON parse error")
+                    .doesNotContain("Unexpected character");
+        }
+
+        @Test
+        void invalidEnumInPathListsTheAllowedValues() throws Exception {
+            postJson("/material/status/m1/PUBLISHED", t1, "")
+                    .andExpect(status().isBadRequest())
+                    .andExpect(jsonPath("$.error").value("Bad Request"))
+                    .andExpect(jsonPath("$.message", containsString("WAITING")))
+                    .andExpect(jsonPath("$.message", containsString("APPROVED")));
+        }
+
+        @Test
+        void unauthenticatedErrorUsesTheSharedContract() throws Exception {
+            mvc.perform(get("/class/"))
+                    .andExpect(status().isUnauthorized())
+                    .andExpect(jsonPath("$.status").value(401))
+                    .andExpect(jsonPath("$.error").value("Unauthorized"))
+                    .andExpect(jsonPath("$.message").value(SecurityErrorResponses.UNAUTHENTICATED_MESSAGE))
+                    .andExpect(jsonPath("$.path").value("/class/"));
+        }
+
+        @Test
+        void forbiddenErrorIsTheSameForRoleAndServiceDenials() throws Exception {
+            String roleDenied = postJson("/class/create", s1, NEW_CLASS_JSON)
+                    .andExpect(status().isForbidden())
+                    .andExpect(jsonPath("$.error").value("Forbidden"))
+                    .andExpect(jsonPath("$.message").value(SecurityErrorResponses.ACCESS_DENIED_MESSAGE))
+                    .andReturn().getResponse().getContentAsString();
+            String serviceDenied = postJson("/class/create", t1, """
+                    {"teacherId":"t2","subject":"F","title":"T","description":"D"}
+                    """)
+                    .andExpect(status().isForbidden())
+                    .andReturn().getResponse().getContentAsString();
+
+            assertThat(serviceDenied).isEqualTo(roleDenied);
+        }
+
+        @Test
+        void notFoundAndConflictUseTheSharedContract() throws Exception {
+            getAs("/class/c2", t1)
+                    .andExpect(status().isNotFound())
+                    .andExpect(jsonPath("$.status").value(404))
+                    .andExpect(jsonPath("$.error").value("Not Found"))
+                    .andExpect(jsonPath("$.message").value("Class not found."));
+
+            postJson("/material/status/m2/APPROVED", t1, "")
+                    .andExpect(status().isConflict())
+                    .andExpect(jsonPath("$.status").value(409))
+                    .andExpect(jsonPath("$.error").value("Conflict"))
+                    .andExpect(jsonPath("$.message", containsString("WAITING -> APPROVED")));
+        }
+
+        @Test
+        void unknownRouteReturns404WithoutFrameworkDetails() throws Exception {
+            String body = getAs("/route-that-does-not-exist", t1)
+                    .andExpect(status().isNotFound())
+                    .andExpect(jsonPath("$.message").value("Resource not found."))
+                    .andReturn().getResponse().getContentAsString();
+
+            assertThat(body).doesNotContainIgnoringCase("static resource");
+        }
+
+        @Test
+        void unsupportedMethodReturns405() throws Exception {
+            mvc.perform(org.springframework.test.web.servlet.request.MockMvcRequestBuilders.put("/class/create")
+                            .header(HttpHeaders.AUTHORIZATION, bearer(t1))
+                            .contentType(MediaType.APPLICATION_JSON).content(NEW_CLASS_JSON))
+                    .andExpect(status().isMethodNotAllowed())
+                    .andExpect(jsonPath("$.status").value(405))
+                    .andExpect(jsonPath("$.message").value("HTTP method not supported for this resource."));
+        }
+
+        @Test
+        void unexpectedErrorsReturnAGeneric500() throws Exception {
+            when(classRepository.findByTeacherId("t1"))
+                    .thenThrow(new IllegalStateException("connection string with password=secret-value"));
+
+            String body = getAs("/class/", t1)
+                    .andExpect(status().isInternalServerError())
+                    .andExpect(jsonPath("$.status").value(500))
+                    .andExpect(jsonPath("$.error").value("Internal Server Error"))
+                    .andExpect(jsonPath("$.message").value("Internal server error."))
+                    .andReturn().getResponse().getContentAsString();
+
+            assertThat(body).doesNotContain("secret-value").doesNotContain("IllegalStateException")
+                    .doesNotContain("at com.sensei");
+        }
+    }
+
+    // ---------- falhas da OpenAI ----------
+
+    @Nested
+    class OpenAiFailures {
+        private static final String SUMMARY_JSON = "{\"text\":\"Aula sobre frações\",\"classId\":\"c1\"}";
+
+        @Test
+        void transcriptionTimeoutReturns502WithoutRetrying() throws Exception {
+            openAiTranscription.expect(ExpectedCount.once(), MockRestRequestMatchers.requestTo(TRANSCRIBE_URL))
+                    .andRespond(MockRestResponseCreators.withException(new SocketTimeoutException("Read timed out")));
+
+            String body = mvc.perform(multipart("/ai/transcribe")
+                            .file(new MockMultipartFile("file", "aula.mp3", "audio/mpeg", new byte[]{1, 2, 3}))
+                            .header(HttpHeaders.AUTHORIZATION, bearer(t1)))
+                    .andExpect(status().isBadGateway())
+                    .andExpect(jsonPath("$.error").value("Bad Gateway"))
+                    .andExpect(jsonPath("$.message").value("Failed to communicate with the AI service."))
+                    .andReturn().getResponse().getContentAsString();
+
+            assertThat(body).doesNotContain("timed out").doesNotContain("openai.test");
+        }
+
+        @Test
+        void summaryConnectionFailureReturns502AndCreatesNoMaterial() throws Exception {
+            openAi.expect(ExpectedCount.once(), MockRestRequestMatchers.requestTo(CHAT_URL))
+                    .andRespond(MockRestResponseCreators.withException(new ConnectException("Connection refused")));
+
+            postJson("/ai/summarize", t1, SUMMARY_JSON)
+                    .andExpect(status().isBadGateway())
+                    .andExpect(jsonPath("$.message").value("Failed to communicate with the AI service."));
+
+            verify(materialRepository, never()).save(any());
+        }
+
+        @Test
+        void summaryRejectedByOpenAiReturns502WithoutLeakingTheKey() throws Exception {
+            openAi.expect(ExpectedCount.once(), MockRestRequestMatchers.requestTo(CHAT_URL))
+                    .andRespond(MockRestResponseCreators.withUnauthorizedRequest()
+                            .body("{\"error\":{\"message\":\"Incorrect API key provided: test-only-key\"}}")
+                            .contentType(MediaType.APPLICATION_JSON));
+
+            String body = postJson("/ai/summarize", t1, SUMMARY_JSON)
+                    .andExpect(status().isBadGateway())
+                    .andReturn().getResponse().getContentAsString();
+
+            assertThat(body).doesNotContain("test-only-key").doesNotContain("Incorrect API key");
+            verify(materialRepository, never()).save(any());
+        }
+
+        @Test
+        void emptySummaryReturns502AndCreatesNoMaterial() throws Exception {
+            openAi.expect(ExpectedCount.once(), MockRestRequestMatchers.requestTo(CHAT_URL))
+                    .andRespond(MockRestResponseCreators.withSuccess("{\"choices\":[]}", MediaType.APPLICATION_JSON));
+
+            postJson("/ai/summarize", t1, SUMMARY_JSON)
+                    .andExpect(status().isBadGateway())
+                    .andExpect(jsonPath("$.message").value("The AI service returned no summary."));
+
+            verify(materialRepository, never()).save(any());
+        }
+    }
+
+    // ---------- independência dos testes ----------
+
+    @Nested
+    class TestIsolation {
+        @Autowired
+        private ApplicationContext nestedContext;
+
+        /**
+         * Garante a causa raiz corrigida no Lote 02C: classes @Nested devem usar o mesmo
+         * ApplicationContext da classe externa, para que o reset automático do @MockitoBean
+         * atue sobre os mesmos mocks injetados nos testes.
+         */
+        @Test
+        void nestedClassesShareTheEnclosingApplicationContext() {
+            assertThat(nestedContext).isSameAs(applicationContext);
         }
     }
 }

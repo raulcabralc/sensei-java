@@ -3,7 +3,6 @@ package com.sensei.app.controller;
 import com.sensei.app.dtos.CreateMaterialDTO;
 import com.sensei.app.dtos.MaterialResponseDTO;
 import com.sensei.app.enums.MaterialStatus;
-import com.sensei.app.model.Material;
 import com.sensei.app.security.AuthenticatedUser;
 import com.sensei.app.service.MaterialService;
 import jakarta.validation.Valid;
@@ -27,7 +26,7 @@ public class MaterialController {
      * Professor responsável: todos os materiais da turma. Aluno matriculado: somente APPROVED.
      */
     @GetMapping("/{classId}")
-    public ResponseEntity<List<Material>> index(
+    public ResponseEntity<List<MaterialResponseDTO>> index(
             @PathVariable("classId") String classId,
             @AuthenticationPrincipal AuthenticatedUser currentUser
     ) {

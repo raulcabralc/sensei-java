@@ -1,6 +1,7 @@
 package com.sensei.app.config;
 
 import com.fasterxml.jackson.databind.exc.InvalidFormatException;
+import com.sensei.app.dtos.ApiErrorResponse;
 import com.sensei.app.exceptions.ClassDeletionConflictException;
 import com.sensei.app.exceptions.ClassDoesNotExistException;
 import com.sensei.app.exceptions.EmailAlreadyExistsException;
@@ -15,160 +16,177 @@ import com.sensei.app.exceptions.UserDeletionConflictException;
 import com.sensei.app.exceptions.UserNotFoundException;
 import com.sensei.app.security.SecurityErrorResponses;
 import jakarta.servlet.http.HttpServletRequest;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
+import org.springframework.http.converter.HttpMessageNotReadableException;
+import org.springframework.security.access.AccessDeniedException;
 import org.springframework.security.authentication.InternalAuthenticationServiceException;
 import org.springframework.security.core.AuthenticationException;
-import org.springframework.http.converter.HttpMessageNotReadableException;
+import org.springframework.web.ErrorResponse;
 import org.springframework.web.bind.MethodArgumentNotValidException;
 import org.springframework.web.bind.annotation.ExceptionHandler;
-import org.springframework.web.bind.annotation.ResponseStatus;
 import org.springframework.web.bind.annotation.RestControllerAdvice;
 import org.springframework.web.method.annotation.MethodArgumentTypeMismatchException;
 import org.springframework.web.multipart.support.MissingServletRequestPartException;
 
 import java.util.Arrays;
-import java.util.Collections;
-import java.util.HashMap;
 import java.util.Map;
+import java.util.TreeMap;
 
+/**
+ * Converte exceções em respostas no contrato único {@link ApiErrorResponse}.
+ * Mensagens de exceções internas, de bibliotecas ou stack traces nunca são devolvidas.
+ */
 @RestControllerAdvice
 public class GlobalExceptionHandler {
+    private static final Logger log = LoggerFactory.getLogger(GlobalExceptionHandler.class);
 
-    @ResponseStatus(HttpStatus.BAD_REQUEST)
+    // ---------- 400 ----------
+
     @ExceptionHandler(MethodArgumentNotValidException.class)
-    public Map<String, String> handleValidationExceptions(
-            MethodArgumentNotValidException e) {
+    public ResponseEntity<ApiErrorResponse> handleValidation(MethodArgumentNotValidException e, HttpServletRequest request) {
+        Map<String, String> fieldErrors = new TreeMap<>();
+        e.getBindingResult().getFieldErrors()
+                .forEach(error -> fieldErrors.putIfAbsent(error.getField(), error.getDefaultMessage()));
 
-        Map<String, String> errors = new HashMap<>();
-
-        e.getBindingResult().getFieldErrors().forEach(error -> {
-            errors.put(error.getField(), error.getDefaultMessage());
-        });
-
-        return errors;
+        return ResponseEntity.badRequest().body(ApiErrorResponse.withFieldErrors(
+                HttpStatus.BAD_REQUEST, "Validation failed.", request.getRequestURI(), fieldErrors));
     }
 
-    @ResponseStatus(HttpStatus.CONFLICT)
-    @ExceptionHandler(EmailAlreadyExistsException.class)
-    public Map<String, String> handleEmailAlreadyExistsException(
-            EmailAlreadyExistsException e) {
-
-        return Collections.singletonMap("error", e.getMessage());
-    }
-
-    @ResponseStatus(HttpStatus.BAD_REQUEST)
     @ExceptionHandler(HttpMessageNotReadableException.class)
-    public Map<String, String> handleHttpMessageNotReadableException(HttpMessageNotReadableException e) {
-
-        Throwable rootCause = e.getRootCause();
-
-        if (rootCause instanceof InvalidFormatException ife) {
-            if (ife.getTargetType() != null && ife.getTargetType().isEnum()) {
-                String enumName = ife.getTargetType().getSimpleName();
-                String validValues = Arrays.toString(ife.getTargetType().getEnumConstants());
-
-                return Collections.singletonMap("error",
-                        String.format("Invalid value '%s' for %s. Must be one of: %s",
-                                ife.getValue(),
-                                enumName,
-                                validValues
-                        )
-                );
-            }
+    public ResponseEntity<ApiErrorResponse> handleNotReadable(HttpMessageNotReadableException e, HttpServletRequest request) {
+        if (e.getRootCause() instanceof InvalidFormatException ife
+                && ife.getTargetType() != null && ife.getTargetType().isEnum()) {
+            return respond(HttpStatus.BAD_REQUEST, String.format("Invalid value '%s' for %s. Must be one of: %s",
+                    ife.getValue(),
+                    ife.getTargetType().getSimpleName(),
+                    Arrays.toString(ife.getTargetType().getEnumConstants())), request);
         }
 
-        return Collections.singletonMap("error", "Malformed JSON request or invalid data type.");
+        return respond(HttpStatus.BAD_REQUEST, "Malformed JSON request or invalid data type.", request);
     }
 
-    @ResponseStatus(HttpStatus.BAD_REQUEST)
-    @ExceptionHandler(NoChangesMadeException.class)
-    public Map<String, String> handleNoChangesMadeException(NoChangesMadeException e) {
-        return Collections.singletonMap("error", e.getMessage());
+    @ExceptionHandler(MethodArgumentTypeMismatchException.class)
+    public ResponseEntity<ApiErrorResponse> handleTypeMismatch(MethodArgumentTypeMismatchException e, HttpServletRequest request) {
+        if (e.getRequiredType() != null && e.getRequiredType().isEnum()) {
+            return respond(HttpStatus.BAD_REQUEST, String.format("Invalid value '%s'. Allowed values: %s",
+                    e.getValue(), Arrays.toString(e.getRequiredType().getEnumConstants())), request);
+        }
+
+        return respond(HttpStatus.BAD_REQUEST, "Invalid value for parameter '" + e.getName() + "'.", request);
     }
 
-    /**
-     * Recurso inexistente ou oculto pela política de acesso (sem revelar qual dos dois).
-     */
-    @ResponseStatus(HttpStatus.NOT_FOUND)
-    @ExceptionHandler({
-            UserNotFoundException.class,
-            ClassDoesNotExistException.class,
-            MaterialDoesNotExistException.class
-    })
-    public Map<String, String> handleNotFound(RuntimeException e) {
-        return Collections.singletonMap("error", e.getMessage());
+    @ExceptionHandler(MissingServletRequestPartException.class)
+    public ResponseEntity<ApiErrorResponse> handleMissingPart(MissingServletRequestPartException e, HttpServletRequest request) {
+        return respond(HttpStatus.BAD_REQUEST, "Required part '" + e.getRequestPartName() + "' is missing.", request);
     }
 
-    @ResponseStatus(HttpStatus.BAD_REQUEST)
     @ExceptionHandler({
             UnsupportedUpdateFieldException.class,
             InvalidPasswordException.class,
-            InvalidRequestException.class
+            InvalidRequestException.class,
+            NoChangesMadeException.class
     })
-    public Map<String, String> handleInvalidInput(RuntimeException e) {
-        return Collections.singletonMap("error", e.getMessage());
+    public ResponseEntity<ApiErrorResponse> handleInvalidInput(RuntimeException e, HttpServletRequest request) {
+        return respond(HttpStatus.BAD_REQUEST, e.getMessage(), request);
     }
 
-    @ResponseStatus(HttpStatus.BAD_REQUEST)
-    @ExceptionHandler(MissingServletRequestPartException.class)
-    public Map<String, String> handleMissingRequestPart(MissingServletRequestPartException e) {
-        return Collections.singletonMap("error", "Required part '" + e.getRequestPartName() + "' is missing.");
-    }
-
-    /**
-     * Operação incompatível com o estado atual ou com dependências existentes.
-     */
-    @ResponseStatus(HttpStatus.CONFLICT)
-    @ExceptionHandler({
-            UserDeletionConflictException.class,
-            ClassDeletionConflictException.class,
-            InvalidStatusTransitionException.class
-    })
-    public Map<String, String> handleConflict(RuntimeException e) {
-        return Collections.singletonMap("error", e.getMessage());
-    }
-
-    /**
-     * Falha em serviço externo (OpenAI). Mensagem genérica; detalhes ficam apenas no log do servidor.
-     */
-    @ResponseStatus(HttpStatus.BAD_GATEWAY)
-    @ExceptionHandler(ExternalServiceException.class)
-    public Map<String, String> handleExternalServiceException(ExternalServiceException e) {
-        return Collections.singletonMap("error", e.getMessage());
-    }
+    // ---------- 401 / 403 ----------
 
     /**
      * Falha de login (e-mail inexistente ou senha incorreta): mensagem genérica,
      * sem indicar qual dos dois está errado.
      */
     @ExceptionHandler(AuthenticationException.class)
-    public ResponseEntity<Map<String, Object>> handleAuthenticationException(
-            AuthenticationException e, HttpServletRequest request) {
-        return ResponseEntity.status(HttpStatus.UNAUTHORIZED)
-                .body(SecurityErrorResponses.body(HttpStatus.UNAUTHORIZED, SecurityErrorResponses.INVALID_CREDENTIALS_MESSAGE, request));
+    public ResponseEntity<ApiErrorResponse> handleAuthentication(AuthenticationException e, HttpServletRequest request) {
+        return respond(HttpStatus.UNAUTHORIZED, SecurityErrorResponses.INVALID_CREDENTIALS_MESSAGE, request);
     }
 
     /**
      * Erro interno durante a autenticação (ex.: banco indisponível). Não é credencial inválida.
      */
     @ExceptionHandler(InternalAuthenticationServiceException.class)
-    public ResponseEntity<Map<String, Object>> handleInternalAuthenticationServiceException(
-            InternalAuthenticationServiceException e, HttpServletRequest request) {
-        return ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR)
-                .body(SecurityErrorResponses.body(HttpStatus.INTERNAL_SERVER_ERROR, "Authentication could not be completed.", request));
+    public ResponseEntity<ApiErrorResponse> handleInternalAuthentication(InternalAuthenticationServiceException e,
+                                                                         HttpServletRequest request) {
+        log.error("Authentication could not be completed", e);
+        return respond(HttpStatus.INTERNAL_SERVER_ERROR, "Authentication could not be completed.", request);
     }
 
-    @ResponseStatus(HttpStatus.BAD_REQUEST)
-    @ExceptionHandler(MethodArgumentTypeMismatchException.class)
-    public Map<String, String> handleTypeMismatch(MethodArgumentTypeMismatchException ex) {
+    /**
+     * Operação proibida (@PreAuthorize ou verificação nos services). Mesmo corpo do JsonAccessDeniedHandler.
+     */
+    @ExceptionHandler(AccessDeniedException.class)
+    public ResponseEntity<ApiErrorResponse> handleAccessDenied(AccessDeniedException e, HttpServletRequest request) {
+        return respond(HttpStatus.FORBIDDEN, SecurityErrorResponses.ACCESS_DENIED_MESSAGE, request);
+    }
 
-        if (ex.getRequiredType() != null && ex.getRequiredType().isEnum()) {
-            String validValues = Arrays.toString(ex.getRequiredType().getEnumConstants());
-            return Collections.singletonMap("error",
-                    String.format("Invalid value '%s'. Allowed values: %s", ex.getValue(), validValues));
+    // ---------- 404 / 409 / 502 ----------
+
+    /**
+     * Recurso inexistente ou oculto pela política de acesso (sem revelar qual dos dois).
+     */
+    @ExceptionHandler({
+            UserNotFoundException.class,
+            ClassDoesNotExistException.class,
+            MaterialDoesNotExistException.class
+    })
+    public ResponseEntity<ApiErrorResponse> handleNotFound(RuntimeException e, HttpServletRequest request) {
+        return respond(HttpStatus.NOT_FOUND, e.getMessage(), request);
+    }
+
+    @ExceptionHandler({
+            EmailAlreadyExistsException.class,
+            UserDeletionConflictException.class,
+            ClassDeletionConflictException.class,
+            InvalidStatusTransitionException.class
+    })
+    public ResponseEntity<ApiErrorResponse> handleConflict(RuntimeException e, HttpServletRequest request) {
+        return respond(HttpStatus.CONFLICT, e.getMessage(), request);
+    }
+
+    /**
+     * Falha em serviço externo (OpenAI). Mensagem genérica; a causa fica apenas no log do servidor.
+     */
+    @ExceptionHandler(ExternalServiceException.class)
+    public ResponseEntity<ApiErrorResponse> handleExternalService(ExternalServiceException e, HttpServletRequest request) {
+        return respond(HttpStatus.BAD_GATEWAY, e.getMessage(), request);
+    }
+
+    // ---------- demais ----------
+
+    /**
+     * Exceções do Spring MVC que já definem um status HTTP (rota inexistente, método não suportado,
+     * upload acima do limite, ...) mantêm o status com mensagem genérica. Qualquer outra exceção
+     * é um erro interno: 500 genérico, com detalhes somente no log.
+     */
+    @ExceptionHandler(Exception.class)
+    public ResponseEntity<ApiErrorResponse> handleUnexpected(Exception e, HttpServletRequest request) {
+        if (e instanceof ErrorResponse errorResponse) {
+            HttpStatus status = HttpStatus.resolve(errorResponse.getStatusCode().value());
+
+            if (status != null && status.is4xxClientError()) {
+                return respond(status, clientErrorMessage(status), request);
+            }
         }
 
-        return Collections.singletonMap("error", "Invalid argument type: " + ex.getMessage());
+        log.error("Unexpected error processing {} {}", request.getMethod(), request.getRequestURI(), e);
+        return respond(HttpStatus.INTERNAL_SERVER_ERROR, "Internal server error.", request);
+    }
+
+    private static String clientErrorMessage(HttpStatus status) {
+        return switch (status) {
+            case NOT_FOUND -> "Resource not found.";
+            case METHOD_NOT_ALLOWED -> "HTTP method not supported for this resource.";
+            case PAYLOAD_TOO_LARGE -> "Request exceeds the maximum allowed size.";
+            case UNSUPPORTED_MEDIA_TYPE -> "Unsupported media type.";
+            case NOT_ACCEPTABLE -> "Requested response format is not supported.";
+            default -> status.getReasonPhrase() + ".";
+        };
+    }
+
+    private static ResponseEntity<ApiErrorResponse> respond(HttpStatus status, String message, HttpServletRequest request) {
+        return ResponseEntity.status(status).body(ApiErrorResponse.of(status, message, request.getRequestURI()));
     }
 }

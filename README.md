@@ -80,9 +80,12 @@ Todas as configurações sensíveis vêm de variáveis de ambiente (arquivos em 
 | `SPRING_PROFILES_ACTIVE` | Recomendada | `dev` para desenvolvimento local, `prod` para produção. |
 | `JWT_SECRET` | **Sim, em todos os perfis** | Mínimo de **32 bytes**. Sem valor padrão. |
 | `JWT_EXPIRATION_MS` | Não | Padrão `86400000` (24 h). Máximo `2147483647`. |
-| `MONGODB_URI` | Sim, exceto no `dev` | No `dev`, o padrão é `mongodb://localhost:27017/sensei`. |
+| `MONGODB_URI` | Sim, exceto no `dev` | No `dev`, o padrão é `mongodb://localhost:27017/sensei` quando a variável **não existe** (não a defina vazia). |
 | `OPENAI_API_KEY` | Sim, exceto no `dev` | No `dev` pode ficar vazia (os endpoints `/ai/**` falham). |
 | `CORS_ALLOWED_ORIGINS` | Não | Origens de navegador autorizadas, separadas por vírgula (ex.: `http://localhost:5173`). Vazio: nenhuma origem externa. `*` não é aceito. |
+| `OPENAI_TIMEOUT_CONNECT` | Não | Timeout de conexão com a OpenAI. Padrão `10s`. |
+| `OPENAI_TIMEOUT_CHAT_READ` | Não | Timeout de resposta do resumo de texto. Padrão `90s`. |
+| `OPENAI_TIMEOUT_TRANSCRIPTION_READ` | Não | Timeout de resposta da transcrição de áudio. Padrão `300s`. |
 
 > ⚠️ O Spring Boot **não** lê arquivos `.env` automaticamente. O `.env.example` serve como referência; os valores devem ser informados na Run Configuration (abaixo) ou no shell. Nunca versione um `.env` real (ele já está no `.gitignore`).
 
@@ -134,6 +137,8 @@ Compilar e executar os testes automatizados (não exigem MongoDB nem OpenAI):
 ./mvnw clean verify        # Windows: .\mvnw.cmd clean verify
 ```
 
+> Linux/macOS: se `./mvnw` responder `Permission denied`, o arquivo perdeu o bit de execução (comum quando o repositório é versionado a partir do Windows). Use `sh mvnw clean verify` ou execute `chmod +x mvnw`.
+
 ### 6. Identificando uma inicialização bem-sucedida
 
 No console, procure por:
@@ -176,6 +181,41 @@ Erros comuns na inicialização:
 4. `GET /user/me` retorna os dados do usuário autenticado, incluindo o `id` usado em `PATCH /user/update/{id}` e `DELETE /user/delete/{id}` (cada usuário só altera ou exclui a própria conta).
 
 > ℹ️ Alterar o próprio e-mail invalida o token atual (o token identifica o usuário pelo e-mail): faça login novamente com o novo e-mail.
+
+### 10. Formato das respostas de erro
+
+Todos os erros da API seguem o mesmo formato:
+
+```json
+{
+  "status": 404,
+  "error": "Not Found",
+  "message": "Class not found.",
+  "path": "/class/abc123"
+}
+```
+
+Erros de validação (`400`) incluem também `fieldErrors`:
+
+```json
+{
+  "status": 400,
+  "error": "Bad Request",
+  "message": "Validation failed.",
+  "path": "/auth/register",
+  "fieldErrors": { "email": "Invalid email.", "role": "Role is required." }
+}
+```
+
+| Status | Significado |
+|---|---|
+| `400` | Dados inválidos ou JSON malformado |
+| `401` | Token ausente, inválido ou expirado; ou credenciais de login inválidas |
+| `403` | Usuário autenticado sem permissão para a operação |
+| `404` | Recurso inexistente **ou** pertencente a outro usuário (as duas situações são indistinguíveis) |
+| `409` | Conflito com o estado atual (e-mail em uso, transição de status inválida, exclusão com dependências) |
+| `500` | Erro interno (detalhes apenas no log do servidor) |
+| `502` | Falha ou timeout na comunicação com a OpenAI |
 
 ## 🎯 Objetivo
 
