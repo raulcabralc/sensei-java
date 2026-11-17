@@ -1,0 +1,18 @@
+# Perfil de produção. Ative com SPRING_PROFILES_ACTIVE=prod.
+# MONGODB_URI, JWT_SECRET e OPENAI_API_KEY são obrigatórias e herdadas de application.yml,
+# sem nenhum valor de fallback.
+
+server:
+  error:
+    # Não expor detalhes internos nas respostas de erro padrão do Spring Boot.
+    include-message: never
+    include-binding-errors: never
+    include-stacktrace: never
+    include-exception: false
+    whitelabel:
+      enabled: false
+
+logging:
+  level:
+    root: INFO
+    com.sensei.app: INFO

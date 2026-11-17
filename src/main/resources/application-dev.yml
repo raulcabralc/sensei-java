@@ -1,0 +1,26 @@
+# Perfil de desenvolvimento local. Ative com SPRING_PROFILES_ACTIVE=dev.
+# Não armazene credenciais reais neste arquivo.
+
+spring:
+  data:
+    mongodb:
+      # MongoDB local sem autenticação, caso MONGODB_URI não seja informada.
+      uri: ${MONGODB_URI:mongodb://localhost:27017/sensei}
+
+openai:
+  api:
+    # Permite iniciar a aplicação sem chave OpenAI no desenvolvimento.
+    # Sem chave, apenas os endpoints /ai/** falham (a OpenAI recusa a requisição).
+    key: ${OPENAI_API_KEY:}
+
+server:
+  error:
+    # Facilita a depuração nas respostas de erro padrão do Spring Boot.
+    include-message: always
+    include-binding-errors: always
+
+logging:
+  level:
+    com.sensei.app: DEBUG
+    # Para depurar a cadeia de filtros de segurança, descomente:
+    # org.springframework.security: DEBUG

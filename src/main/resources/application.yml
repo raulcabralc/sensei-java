@@ -1,0 +1,38 @@
+# Configuração compartilhada por todos os perfis.
+# Segredos e endereços de infraestrutura vêm exclusivamente de variáveis de ambiente.
+# Variáveis documentadas em .env.example. Perfil selecionado por SPRING_PROFILES_ACTIVE (dev | prod).
+
+spring:
+  application:
+    name: sensei
+
+  data:
+    mongodb:
+      # Obrigatória fora do perfil dev (o dev define um fallback local).
+      uri: ${MONGODB_URI}
+      # Índices não são criados automaticamente a partir das entidades.
+      # A evolução de índices/estruturas será feita por migrações versionadas.
+      auto-index-creation: false
+
+  servlet:
+    multipart:
+      # A API de transcrição da OpenAI aceita arquivos de até 25 MB.
+      max-file-size: 25MB
+      # Arquivo + campos do formulário multipart.
+      max-request-size: 26MB
+
+app:
+  # Segredo HMAC usado para assinar e validar os JWT. Obrigatório, sem fallback.
+  # Deve ter no mínimo 32 bytes (256 bits); chaves menores são rejeitadas pela biblioteca jjwt.
+  jwtSecret: ${JWT_SECRET}
+  # Validade do token em milissegundos. Padrão: 24 horas.
+  # O campo no código é int: valor máximo 2147483647 (~24,8 dias).
+  jwtExpirationMs: ${JWT_EXPIRATION_MS:86400000}
+
+openai:
+  api:
+    # Chave da API OpenAI. Obrigatória fora do perfil dev.
+    key: ${OPENAI_API_KEY}
+    # Endpoints públicos da OpenAI (não são segredos).
+    url: https://api.openai.com/v1/audio/transcriptions
+    chat-url: https://api.openai.com/v1/chat/completions
