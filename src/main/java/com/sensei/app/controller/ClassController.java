@@ -3,9 +3,12 @@ package com.sensei.app.controller;
 import com.sensei.app.dtos.CreateClassDTO;
 import com.sensei.app.dtos.UpdateClassDTO;
 import com.sensei.app.model.Class;
+import com.sensei.app.security.AuthenticatedUser;
 import com.sensei.app.service.ClassService;
-import org.apache.coyote.BadRequestException;
+import jakarta.validation.Valid;
 import org.springframework.http.ResponseEntity;
+import org.springframework.security.access.prepost.PreAuthorize;
+import org.springframework.security.core.annotation.AuthenticationPrincipal;
 import org.springframework.web.bind.annotation.*;
 
 import java.util.List;
@@ -19,40 +22,50 @@ public class ClassController {
         this.classService = classService;
     }
 
+    /**
+     * Professor: suas turmas. Aluno: turmas em que está matriculado.
+     */
     @GetMapping("/")
-    public ResponseEntity<List<com.sensei.app.model.Class>> index() throws BadRequestException {
-        try {
-            List<com.sensei.app.model.Class> classes = this.classService.index();
+    public ResponseEntity<List<Class>> index(@AuthenticationPrincipal AuthenticatedUser currentUser) {
+        return ResponseEntity.ok(this.classService.index(currentUser));
+    }
 
-            return ResponseEntity.ok(classes);
-        } catch (Exception e) {
-            throw new BadRequestException(e);
-        }
+    /**
+     * Turma do professor responsável ou de um aluno matriculado; 404 nos demais casos.
+     */
+    @GetMapping("/{classId}")
+    public ResponseEntity<Class> getClassById(
+            @PathVariable("classId") String classId,
+            @AuthenticationPrincipal AuthenticatedUser currentUser
+    ) {
+        return ResponseEntity.ok(this.classService.getVisibleClass(classId, currentUser));
     }
 
     @PostMapping("/create")
+    @PreAuthorize("hasRole('TEACHER')")
     public ResponseEntity<Class> createClass(
-            @RequestBody CreateClassDTO classDTO
-    ) throws BadRequestException {
-        try {
-            Class classCreated = this.classService.createClass(classDTO);
-
-            return ResponseEntity.ok(classCreated);
-        } catch(Exception e) {
-            throw new BadRequestException(e);
-        }
+            @Valid @RequestBody CreateClassDTO classDTO,
+            @AuthenticationPrincipal AuthenticatedUser currentUser
+    ) {
+        return ResponseEntity.ok(this.classService.createClass(classDTO, currentUser));
     }
 
-    @PatchMapping("/update")
+    @PatchMapping("/update/{classId}")
+    @PreAuthorize("hasRole('TEACHER')")
     public ResponseEntity<Class> updateClass(
-            @RequestBody UpdateClassDTO classDTO
-    ) throws BadRequestException {
-        try {
-            Class classCreated = this.classService.updateClass(classDTO);
+            @PathVariable("classId") String classId,
+            @Valid @RequestBody UpdateClassDTO classDTO,
+            @AuthenticationPrincipal AuthenticatedUser currentUser
+    ) {
+        return ResponseEntity.ok(this.classService.updateClass(classId, classDTO, currentUser));
+    }
 
-            return ResponseEntity.ok(classCreated);
-        } catch(Exception e) {
-            throw new BadRequestException(e);
-        }
+    @DeleteMapping("/delete/{classId}")
+    @PreAuthorize("hasRole('TEACHER')")
+    public void deleteClass(
+            @PathVariable("classId") String classId,
+            @AuthenticationPrincipal AuthenticatedUser currentUser
+    ) {
+        this.classService.deleteClass(classId, currentUser);
     }
 }

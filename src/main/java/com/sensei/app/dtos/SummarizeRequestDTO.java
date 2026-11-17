@@ -15,6 +15,9 @@ public class SummarizeRequestDTO {
     @NotBlank(message = "ClassId was not provided. Use 'classId' to type the text.")
     private String classId;
 
-    @NotBlank(message = "TeacherId was not provided. Use 'teacherId' to type the text.")
+    /**
+     * Opcional. O material gerado é sempre atribuído ao professor autenticado; se informado,
+     * deve ser igual ao ID dele (mantido por compatibilidade com clientes existentes).
+     */
     private String teacherId;
 }

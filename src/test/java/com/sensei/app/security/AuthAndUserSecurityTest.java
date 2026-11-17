@@ -14,9 +14,11 @@ import com.sensei.app.service.AuthService;
 import com.sensei.app.service.UserService;
 import io.jsonwebtoken.Jwts;
 import io.jsonwebtoken.security.Keys;
+import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Nested;
 import org.junit.jupiter.api.Test;
 import org.mockito.ArgumentCaptor;
+import org.mockito.Mockito;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.autoconfigure.web.servlet.WebMvcTest;
 import org.springframework.context.annotation.Import;
@@ -93,6 +95,12 @@ class AuthAndUserSecurityTest {
 
     @MockitoBean
     private MaterialRepository materialRepository;
+
+    @BeforeEach
+    void resetMocks() {
+        // Reset explícito: garante testes independentes da ordem de execução das classes @Nested.
+        Mockito.reset(userRepository, classRepository, materialRepository);
+    }
 
     // ---------- helpers ----------
 
@@ -279,6 +287,16 @@ class AuthAndUserSecurityTest {
 
             assertThat(unknownEmail).isEqualTo(wrongPassword);
             assertThat(wrongPassword).doesNotContain("aluno@test.com").doesNotContain("$2");
+        }
+
+        @Test
+        void loginWithPasswordLongerThan72BytesReturns401NotServerError() throws Exception {
+            persistedUser("s1", "aluno@test.com", UserRole.STUDENT);
+
+            // 40 caracteres de 2 bytes em UTF-8 = 80 bytes (acima do limite do BCrypt).
+            login("aluno@test.com", "é".repeat(40))
+                    .andExpect(status().isUnauthorized())
+                    .andExpect(jsonPath("$.message").value(SecurityErrorResponses.INVALID_CREDENTIALS_MESSAGE));
         }
     }
 

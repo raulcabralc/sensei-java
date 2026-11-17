@@ -12,7 +12,10 @@ public class CreateMaterialDTO {
     @NotNull(message = "ClassId is required.")
     private String classId;
 
-    @NotNull(message = "TeacherId is required.")
+    /**
+     * Opcional. O autor é sempre o professor autenticado; se informado,
+     * deve ser igual ao ID dele (mantido por compatibilidade com clientes existentes).
+     */
     private String teacherId;
 
     @NotNull(message = "MaterialType is required.")

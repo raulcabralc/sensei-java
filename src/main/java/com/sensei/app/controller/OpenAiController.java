@@ -2,15 +2,21 @@ package com.sensei.app.controller;
 
 import com.sensei.app.dtos.ResponseTranscribeDTO;
 import com.sensei.app.dtos.SummarizeRequestDTO;
+import com.sensei.app.security.AuthenticatedUser;
 import com.sensei.app.service.OpenAiService;
 import jakarta.validation.Valid;
-import org.apache.coyote.BadRequestException;
 import org.springframework.http.ResponseEntity;
+import org.springframework.security.access.prepost.PreAuthorize;
+import org.springframework.security.core.annotation.AuthenticationPrincipal;
 import org.springframework.web.bind.annotation.*;
 import org.springframework.web.multipart.MultipartFile;
 
+/**
+ * Operações que consomem a API da OpenAI: restritas a professores.
+ */
 @RestController
 @RequestMapping("/ai")
+@PreAuthorize("hasRole('TEACHER')")
 public class OpenAiController {
     private final OpenAiService openAiService;
 
@@ -19,40 +25,19 @@ public class OpenAiController {
     }
 
     @PostMapping("/transcribe")
-    public ResponseEntity<ResponseTranscribeDTO> transcribe(@RequestParam("file") MultipartFile file) throws BadRequestException {
-        try {
-            if (file.isEmpty()) {
-                throw new BadRequestException("Failed to transcribe file");
-            }
-
-            ResponseTranscribeDTO transcription = this.openAiService.transcribeAudio(file);
-
-            return ResponseEntity.ok(transcription);
-        } catch (Exception e) {
-            throw new BadRequestException(e);
-        }
+    public ResponseEntity<ResponseTranscribeDTO> transcribe(
+            @RequestParam("file") MultipartFile file,
+            @AuthenticationPrincipal AuthenticatedUser currentUser
+    ) {
+        return ResponseEntity.ok(this.openAiService.transcribeAudio(file, currentUser));
     }
 
     @PostMapping("/summarize")
     public ResponseEntity<String> summarize(
-            @Valid @RequestBody SummarizeRequestDTO summarizeDTO
-    ) throws BadRequestException {
-        try {
-            if (summarizeDTO.getText().isEmpty()) {
-                throw new BadRequestException("No text provided");
-            }
-
-            String stringText = summarizeDTO.toString();
-
-            if (stringText == null || stringText.isEmpty()) {
-                throw new BadRequestException("No text provided");
-            }
-
-            String summarizedText = this.openAiService.summarizeText(stringText, summarizeDTO.getClassId(), summarizeDTO.getTeacherId());
-
-            return ResponseEntity.ok(summarizedText);
-        } catch (Exception e) {
-            throw new BadRequestException(e);
-        }
+            @Valid @RequestBody SummarizeRequestDTO summarizeDTO,
+            @AuthenticationPrincipal AuthenticatedUser currentUser
+    ) {
+        // Somente o campo de texto é enviado à OpenAI (não a representação completa do DTO).
+        return ResponseEntity.ok(this.openAiService.summarizeText(summarizeDTO, currentUser));
     }
 }

@@ -1,0 +1,6 @@
+# Finais de linha dos scripts do Maven Wrapper (independe de core.autocrlf).
+# mvnw é executado por shells POSIX e exige LF; mvnw.cmd é um script do Windows e usa CRLF.
+/mvnw text eol=lf
+*.cmd text eol=crlf
+*.sh text eol=lf
+/.mvn/wrapper/maven-wrapper.properties text eol=lf

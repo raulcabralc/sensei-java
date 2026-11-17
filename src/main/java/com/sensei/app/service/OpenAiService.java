@@ -4,7 +4,14 @@ import com.sensei.app.dtos.CreateMaterialDTO;
 import com.sensei.app.dtos.OpenAiRequestDTO;
 import com.sensei.app.dtos.OpenAiResponseDTO;
 import com.sensei.app.dtos.ResponseTranscribeDTO;
+import com.sensei.app.dtos.SummarizeRequestDTO;
 import com.sensei.app.enums.MaterialType;
+import com.sensei.app.exceptions.ExternalServiceException;
+import com.sensei.app.exceptions.InvalidRequestException;
+import com.sensei.app.model.Class;
+import com.sensei.app.security.AuthenticatedUser;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.core.io.ByteArrayResource;
 import org.springframework.http.HttpEntity;
@@ -14,6 +21,9 @@ import org.springframework.http.ResponseEntity;
 import org.springframework.stereotype.Service;
 import org.springframework.util.LinkedMultiValueMap;
 import org.springframework.util.MultiValueMap;
+import org.springframework.util.StringUtils;
+import org.springframework.web.client.RestClientException;
+import org.springframework.web.client.RestClientResponseException;
 import org.springframework.web.client.RestTemplate;
 import org.springframework.web.multipart.MultipartFile;
 
@@ -22,8 +32,15 @@ import java.time.LocalDate;
 import java.time.format.DateTimeFormatter;
 import java.util.List;
 
+/**
+ * Operações de IA (consomem créditos da OpenAI): restritas a professores.
+ * Toda autorização e validação acontece ANTES de qualquer chamada externa.
+ */
 @Service
 public class OpenAiService {
+    private static final Logger log = LoggerFactory.getLogger(OpenAiService.class);
+    private static final String AI_SERVICE_ERROR = "Failed to communicate with the AI service.";
+
     @Value("${openai.api.key}")
     private String apiKey;
 
@@ -34,13 +51,25 @@ public class OpenAiService {
     private String chatUrl;
 
     private final MaterialService materialService;
+    private final ClassService classService;
+    private final RestTemplate restTemplate;
 
-    public OpenAiService(MaterialService materialService) {
+    public OpenAiService(MaterialService materialService, ClassService classService, RestTemplate openAiRestTemplate) {
         this.materialService = materialService;
+        this.classService = classService;
+        this.restTemplate = openAiRestTemplate;
     }
 
-    public ResponseTranscribeDTO transcribeAudio(MultipartFile file) throws IOException {
-        RestTemplate restTemplate = new RestTemplate();
+    /**
+     * Transcrição avulsa: não está vinculada a turma nem cria material.
+     * Política: somente professores (o fluxo do produto é o professor gravando a aula).
+     */
+    public ResponseTranscribeDTO transcribeAudio(MultipartFile file, AuthenticatedUser user) {
+        AccessChecks.requireTeacher(user);
+
+        if (file == null || file.isEmpty()) {
+            throw new InvalidRequestException("An audio file is required.");
+        }
 
         HttpHeaders headers = new HttpHeaders();
         headers.setContentType(MediaType.MULTIPART_FORM_DATA);
@@ -48,12 +77,17 @@ public class OpenAiService {
 
         MultiValueMap<String, Object> body = new LinkedMultiValueMap<>();
 
-        ByteArrayResource fileSource = new ByteArrayResource(file.getBytes()) {
-            @Override
-            public String getFilename() {
-                return file.getOriginalFilename();
-            }
-        };
+        ByteArrayResource fileSource;
+        try {
+            fileSource = new ByteArrayResource(file.getBytes()) {
+                @Override
+                public String getFilename() {
+                    return file.getOriginalFilename();
+                }
+            };
+        } catch (IOException e) {
+            throw new InvalidRequestException("The audio file could not be read.");
+        }
 
         body.add("file", fileSource);
         body.add("model", "whisper-1");
@@ -64,18 +98,46 @@ public class OpenAiService {
             ResponseEntity<ResponseTranscribeDTO> response = restTemplate.postForEntity(apiUrl, requestEntity, ResponseTranscribeDTO.class);
 
             return response.getBody();
-        } catch (Exception e) {
-            throw new RuntimeException("Error calling OpenAI API: ", e.getCause());
+        } catch (RestClientException e) {
+            throw externalFailure("transcription", e);
         }
     }
 
-    public String summarizeText(
-                String text,
-                String classId,
-                String teacherId
-            ) {
-        RestTemplate restTemplate = new RestTemplate();
+    /**
+     * Resume o texto e cria um material BASIC (WAITING) na turma informada.
+     * A turma precisa pertencer ao professor autenticado; isso é verificado antes da chamada à OpenAI.
+     */
+    public String summarizeText(SummarizeRequestDTO summarizeDTO, AuthenticatedUser user) {
+        AccessChecks.requireTeacher(user);
+        AccessChecks.assertDeclaredTeacherMatches(summarizeDTO.getTeacherId(), user);
 
+        Class clazz = this.classService.getOwnedClass(summarizeDTO.getClassId(), user);
+
+        String text = summarizeDTO.getText();
+
+        if (!StringUtils.hasText(text)) {
+            throw new InvalidRequestException("No text provided");
+        }
+
+        String content = this.requestSummary(text);
+
+        DateTimeFormatter formatter = DateTimeFormatter.ofPattern("dd/MM/yyyy");
+        String dateFormat = LocalDate.now().format(formatter);
+
+        CreateMaterialDTO newSummarizedMaterial = new CreateMaterialDTO();
+
+        newSummarizedMaterial.setClassId(clazz.getId());
+        newSummarizedMaterial.setMaterialType(MaterialType.BASIC);
+        newSummarizedMaterial.setTitle("Aula - " + dateFormat);
+        newSummarizedMaterial.setDescription("Resumo da aula do dia " + dateFormat);
+        newSummarizedMaterial.setText(content);
+
+        this.materialService.createMaterial(newSummarizedMaterial, user);
+
+        return content;
+    }
+
+    private String requestSummary(String text) {
         HttpHeaders headers = new HttpHeaders();
         headers.setContentType(MediaType.APPLICATION_JSON);
         headers.setBearerAuth(apiKey);
@@ -93,39 +155,32 @@ public class OpenAiService {
         var requestBody = new OpenAiRequestDTO("gpt-4o-mini", messages);
         HttpEntity<OpenAiRequestDTO> requestEntity = new HttpEntity<>(requestBody, headers);
 
+        OpenAiResponseDTO responseBody;
         try {
-            ResponseEntity<OpenAiResponseDTO> response = restTemplate.postForEntity(
-                    chatUrl,
-                    requestEntity,
-                    OpenAiResponseDTO.class
-            );
-
-            if (response.getBody() != null && !response.getBody().choices().isEmpty()) {
-                String content = response.getBody().choices().get(0).message().content();
-
-                DateTimeFormatter formatter = DateTimeFormatter.ofPattern("dd/MM/yyyy");
-
-                String dateFormat = LocalDate.now().format(formatter);
-
-                CreateMaterialDTO newSummarizedMaterial = new CreateMaterialDTO();
-
-                newSummarizedMaterial.setClassId(classId);
-                newSummarizedMaterial.setTeacherId(teacherId);
-                newSummarizedMaterial.setMaterialType(MaterialType.BASIC);
-
-                newSummarizedMaterial.setTitle("Aula - " + dateFormat);
-                newSummarizedMaterial.setDescription("Resumo da aula do dia " + dateFormat);
-
-                newSummarizedMaterial.setText(content);
-
-                this.materialService.createMaterial(newSummarizedMaterial);
-
-                return content;
-            }
-
-            return "Unable to summarize text.";
-        } catch (Exception e) {
-            throw new RuntimeException("Error calling OpenAI API: ", e.getCause());
+            responseBody = restTemplate.postForEntity(chatUrl, requestEntity, OpenAiResponseDTO.class).getBody();
+        } catch (RestClientException e) {
+            throw externalFailure("summary", e);
         }
+
+        if (responseBody == null || responseBody.choices() == null || responseBody.choices().isEmpty()
+                || responseBody.choices().get(0).message() == null
+                || !StringUtils.hasText(responseBody.choices().get(0).message().content())) {
+            throw new ExternalServiceException("The AI service returned no summary.");
+        }
+
+        return responseBody.choices().get(0).message().content();
+    }
+
+    /**
+     * Registra somente o tipo de erro e o status HTTP (nunca a chave nem o corpo da resposta).
+     */
+    private static ExternalServiceException externalFailure(String operation, RestClientException e) {
+        if (e instanceof RestClientResponseException responseException) {
+            log.warn("OpenAI {} request failed with HTTP {}", operation, responseException.getStatusCode().value());
+        } else {
+            log.warn("OpenAI {} request failed: {}", operation, e.getClass().getSimpleName());
+        }
+
+        return new ExternalServiceException(AI_SERVICE_ERROR, e);
     }
 }
